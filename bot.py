@@ -1080,36 +1080,22 @@ def main():
         .build()
     )
 
-    # Команды
     application.add_handler(
-        CommandHandler(
-            "roast",
-            roast_command,
-        )
+        CommandHandler("roast", roast_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "gossip",
-            gossip_command,
-        )
+        CommandHandler("gossip", gossip_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "toxicity",
-            toxicity_command,
-        )
+        CommandHandler("toxicity", toxicity_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "help",
-            help_command,
-        )
+        CommandHandler("help", help_command)
     )
 
-    # Обычные сообщения
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -1123,23 +1109,27 @@ def main():
     print(f"База данных: {DB_PATH}")
     print("==============================")
 
-    # =====================================================
-    # KOYEB / SERVER MODE
-    # =====================================================
+    # Если есть RENDER_EXTERNAL_HOSTNAME,
+    # значит бот работает на Render
+    render_hostname = os.getenv(
+        "RENDER_EXTERNAL_HOSTNAME"
+    )
 
-    koyeb_domain = os.getenv("KOYEB_PUBLIC_DOMAIN")
+    if render_hostname:
 
-    if koyeb_domain:
-        port = int(os.getenv("PORT", "8000"))
+        port = int(
+            os.getenv("PORT", "10000")
+        )
 
         webhook_path = "telegram"
 
         webhook_url = (
-            f"https://{koyeb_domain}/{webhook_path}"
+            f"https://{render_hostname}/"
+            f"{webhook_path}"
         )
 
-        print("Режим: WEBHOOK")
-        print(f"Domain: {koyeb_domain}")
+        print("Режим: RENDER WEBHOOK")
+        print(f"Host: {render_hostname}")
         print(f"Port: {port}")
         print(f"Webhook: {webhook_url}")
 
@@ -1151,12 +1141,9 @@ def main():
             drop_pending_updates=False,
         )
 
-    # =====================================================
-    # LOCAL COMPUTER MODE
-    # =====================================================
-
     else:
-        print("Режим: POLLING")
+
+        print("Режим: LOCAL POLLING")
         print("Бот запущен локально")
 
         application.run_polling()
