@@ -1,24 +1,12 @@
 from pathlib import Path
 
-src = Path("/mnt/data/Вставленный код.py")
-dst = Path("/mnt/data/bot_passive.py")
+src = Path("/mnt/data/bot_passive.py")
+dst = Path("/mnt/data/bot_calm_passive.py")
 
 text = src.read_text(encoding="utf-8")
 
+# 1) Сделать бота заметно более пассивным.
 old_config = """# Бот проверяет, стоит ли вмешиваться,
-# примерно каждые 6-10 сообщений
-AUTO_CHECK_MIN = 6
-AUTO_CHECK_MAX = 10
-
-# Минимум секунд между любыми автоматическими репликами
-AUTO_COOLDOWN = 180
-
-# Бот говорит автоматически только если Gemini
-# считает момент реально удачным
-MIN_AUTO_SCORE = 8
-"""
-
-new_config = """# Бот проверяет, стоит ли вмешиваться,
 # только после довольно большого куска разговора
 AUTO_CHECK_MIN = 12
 AUTO_CHECK_MAX = 20
@@ -41,34 +29,156 @@ DIRECT_REPLY_CHANCE = 0.35
 DIRECT_MENTION_CHANCE = 0.65
 """
 
+new_config = """# Бот проверяет, стоит ли вмешиваться,
+# только после длинного куска реального разговора.
+AUTO_CHECK_MIN = 20
+AUTO_CHECK_MAX = 35
+
+# После автоматической реплики бот молчит минимум 20 минут.
+AUTO_COOLDOWN = 1200
+
+# Автоматически вмешиваемся только в почти идеальный момент.
+MIN_AUTO_SCORE = 10
+
+# Даже при score=10 бот использует момент только иногда.
+AUTO_REPLY_CHANCE = 0.20
+
+# Если просто ответили на сообщение бота — чаще всего молчим.
+DIRECT_REPLY_CHANCE = 0.15
+
+# Явное @упоминание повышает шанс ответа, но не гарантирует его.
+DIRECT_MENTION_CHANCE = 0.50
+
+# Не поддерживаем бесконечную переписку с ботом:
+# после любого ответа ему желательно немного помолчать.
+DIRECT_COOLDOWN = 180
+"""
+
 if old_config not in text:
-    raise RuntimeError("Не удалось найти блок CONFIG для замены.")
+    raise RuntimeError("Не найден текущий CONFIG-блок.")
 text = text.replace(old_config, new_config, 1)
 
-insert_anchor = """# =========================================================
-# GEMINI
-# =========================================================
+# 2) Смягчить все уровни токсичности.
+tox_start = text.find("def toxicity_description(level):")
+tox_end = text.find("\n\ndef make_system_prompt(toxicity):", tox_start)
+if tox_start == -1 or tox_end == -1:
+    raise RuntimeError("Не найден toxicity_description.")
+
+new_toxicity = '''def toxicity_description(level):
+    levels = {
+        1: """
+Очень мягкий юмор.
+Предпочитай добродушную иронию, абсурд и наблюдения за ситуацией.
+Лучше пошутить над происходящим, чем над человеком.
+""",
+
+        2: """
+Лёгкий дружеский сарказм.
+Можно слегка подколоть конкретное действие или фразу,
+но без унижения человека и без злых ярлыков.
+""",
+
+        3: """
+Заметный, но всё ещё дружеский стёб.
+Можно цепляться за противоречия, повторяющиеся обещания и смешные фейлы,
+но шутка должна ощущаться как шутка между друзьями.
+""",
+
+        4: """
+Острый, но не злой стёб.
+Можно быть ехидным, но не дави на человека,
+не переходи на внешность, интеллект, достоинство или личные качества.
+""",
+
+        5: """
+Самый острый разрешённый уровень, но всё ещё без унижения.
+Высмеивай только конкретную ситуацию, сообщение или повторяющийся прикол.
+Не называй человека тупым, жалким, никчёмным и т.п.
+""",
+    }
+
+    return levels.get(level, levels[1])
+'''
+text = text[:tox_start] + new_toxicity + text[tox_end:]
+
+# 3) Полностью смягчить системный характер.
+prompt_start = text.find("def make_system_prompt(toxicity):")
+prompt_end = text.find("\n\n# =========================================================\n# PASSIVITY / ANTI-SPAM", prompt_start)
+if prompt_start == -1 or prompt_end == -1:
+    raise RuntimeError("Не найден make_system_prompt.")
+
+new_prompt = '''def make_system_prompt(toxicity):
+    return f"""
+Ты — редкий, ненавязчивый участник дружеского Telegram-чата.
+
+Ты не ассистент и не ведущий разговора.
+Большую часть времени ты просто читаешь и молчишь.
+Когда пишешь, твоя задача — добавить одну лёгкую смешную реплику,
+а не победить кого-то в споре и не унизить участника.
+
+Твой характер:
+- наблюдательный;
+- спокойный;
+- ироничный;
+- иногда абсурдный;
+- дружелюбный;
+- не пытаешься постоянно быть самым смешным;
+- легко пропускаешь возможность пошутить;
+- не ведёшь длинных диалогов;
+- не цепляешься к одному человеку несколько раз подряд.
+
+УРОВЕНЬ СТЁБА:
+
+{toxicity_description(toxicity)}
+
+Предпочтительный юмор:
+- смешное наблюдение о ситуации;
+- локальный мем;
+- лёгкая ирония;
+- преувеличение;
+- абсурд;
+- самоирония;
+- аккуратный callback к прошлому сообщению.
+
+Плохой юмор, которого нужно избегать:
+- прямые оскорбления;
+- унизительные ярлыки;
+- постоянное высмеивание одного участника;
+- шутки про внешность, ум, ценность человека или его достоинство;
+- агрессивный мат ради мата;
+- ответ на каждую мелочь;
+- попытка обязательно оставить последнее слово.
+
+Правила ответа:
+- обычно одно короткое предложение;
+- максимум два коротких предложения;
+- если шутка не очевидно хорошая — лучше промолчи;
+- не объясняй шутку;
+- не пиши "как ИИ";
+- не выдумывай факты о людях;
+- опирайся только на переписку;
+- не повторяй недавно использованную шутку;
+- не превращай чат в разговор "бот ↔ один человек".
+
+Запрещено строить стёб вокруг:
+- расы;
+- национальности;
+- религии;
+- инвалидности;
+- болезней;
+- сексуальной ориентации;
+- других чувствительных личных характеристик.
+
+Не угрожай людям.
+
+Главная цель:
+выглядеть как молчаливый знакомый, который изредка очень удачно вставляет реплику.
 """
-helper = r'''# =========================================================
-# PASSIVITY / ANTI-SPAM
-# =========================================================
+'''
+text = text[:prompt_start] + new_prompt + text[prompt_end:]
 
-def is_low_signal_message(text):
-    """
-    Сообщения вроде 😂, ❤️, "...", "ок", "ага", "лол"
-    сохраняются в истории, но не считаются поводом отвечать
-    и не приближают автоматический комментарий.
-    """
-    clean = (text or "").strip().lower()
-
-    if not clean:
-        return True
-
-    # Только эмодзи / пунктуация / символы.
-    if not any(ch.isalnum() for ch in clean):
-        return True
-
-    low_signal_words = {
+# 4) Сделать low-signal фильтр чуть шире.
+old_low = '''    low_signal_words = {
         "ок",
         "окей",
         "ага",
@@ -86,30 +196,39 @@ def is_low_signal_message(text):
         "спс",
         "спасибо",
     }
-
-    if clean in low_signal_words:
-        return True
-
-    # Очень короткие ответы без вопроса обычно тоже игнорируем.
-    if len(clean) <= 2 and "?" not in clean:
-        return True
-
-    return False
-
-
 '''
-if insert_anchor not in text:
-    raise RuntimeError("Не удалось найти место для helper-функции.")
-text = text.replace(insert_anchor, helper + insert_anchor, 1)
+new_low = '''    low_signal_words = {
+        "ок",
+        "окей",
+        "ага",
+        "угу",
+        "да",
+        "нет",
+        "ясно",
+        "пон",
+        "понял",
+        "поняла",
+        "лол",
+        "кек",
+        "ахах",
+        "хаха",
+        "хах",
+        "аха",
+        "спс",
+        "спасибо",
+        "мда",
+        "жесть",
+        "капец",
+        "ну",
+        "мм",
+        "хм",
+    }
+'''
+if old_low in text:
+    text = text.replace(old_low, new_low, 1)
 
+# 5) Ужесточить решение об автоматическом вмешательстве.
 text = text.replace(
-"""5-7:
-шутку придумать можно, но лучше промолчать.
-
-8-10:
-есть очень естественная и смешная реплика,
-которая хорошо впишется в разговор.
-""",
 """5-8:
 даже если шутку придумать можно, лучше промолчать.
 
@@ -117,98 +236,34 @@ text = text.replace(
 редкий, очень естественный и реально смешной момент,
 где реплика бота заметно улучшит разговор.
 """,
+"""1-9:
+промолчи. Даже неплохая шутка не является достаточной причиной вмешиваться.
+
+10:
+только редкий, очевидный и очень естественный момент,
+где короткая добрая реплика действительно улучшит разговор.
+Если сомневаешься между 9 и 10 — ставь 9.
+""",
 1,
 )
 
-start = text.find("async def handle_message(")
-end = text.find("# =========================================================\n# START", start)
-if start == -1 or end == -1:
-    raise RuntimeError("Не удалось найти handle_message.")
+# Добавить акцент на мягкий автоматический юмор.
+needle = """Не отвечай просто потому, что можешь.
 
-new_handle = r'''async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    message = update.message
+Если:
+"""
+replacement = """Не отвечай просто потому, что можешь.
 
-    if not message:
-        return
+Для АВТОМАТИЧЕСКИХ реплик предпочитай юмор про ситуацию,
+а не персональный roast. Не выбирай человека целью без очень явного
+и безобидного повода из текущего разговора.
 
-    if not message.text:
-        return
+Если:
+"""
+text = text.replace(needle, replacement, 1)
 
-    user = message.from_user
-
-    if not user:
-        return
-
-    # Не устраиваем войны ботов
-    if user.is_bot:
-        return
-
-    chat_id = message.chat_id
-    text = message.text
-
-    # Сохраняем все текстовые сообщения в историю,
-    # даже если бот на них не собирается отвечать.
-    save_user_message(message)
-
-    # =====================================================
-    # БОТА УПОМЯНУЛИ / ОТВЕТИЛИ НА БОТА
-    # =====================================================
-
-    bot_username = context.bot.username
-
-    mentioned = False
-
-    if bot_username:
-        mentioned = (
-            f"@{bot_username}".lower()
-            in text.lower()
-        )
-
-    replied_to_bot = False
-
-    if (
-        message.reply_to_message
-        and message.reply_to_message.from_user
-    ):
-        replied_to_bot = (
-            message.reply_to_message.from_user.id
-            == context.bot.id
-        )
-
-    # =====================================================
-    # СМАЙЛЫ И ДРУГИЕ "ПУСТЫЕ" ОТВЕТЫ
-    # =====================================================
-
-    # Например:
-    # 😂
-    # ❤️
-    # ...
-    # ок
-    # ага
-    # лол
-    #
-    # Бот это запомнит как часть чата, но отвечать не станет
-    # и даже не засчитает такое сообщение для автопроверки.
-    if is_low_signal_message(text):
-        print(
-            "PASSIVE SKIP:",
-            f"user={user.full_name}",
-            f"text={text!r}",
-        )
-        return
-
-    # Только содержательные сообщения двигают счётчик.
-    state = increase_message_counter(chat_id)
-    toxicity = state["toxicity"]
-
-    # =====================================================
-    # ПРЯМОЕ ОБРАЩЕНИЕ К БОТУ
-    # =====================================================
-
-    if mentioned or replied_to_bot:
+# 6) Прямые ответы: добавить cooldown и снизить вероятность вопросов/длинных сообщений.
+old_direct = '''    if mentioned or replied_to_bot:
         # Больше нет правила "ответить обязательно".
         #
         # На простой reply боту: ~35%.
@@ -227,36 +282,49 @@ new_handle = r'''async def handle_message(
             reply_chance = max(reply_chance, 0.60)
 
         if random.random() > reply_chance:
-            print(
-                "DIRECT SKIP:",
-                f"user={user.full_name}",
-                f"chance={reply_chance:.2f}",
-            )
+'''
+new_direct = '''    if mentioned or replied_to_bot:
+        # Даже прямое обращение не означает обязательный ответ.
+        # Сначала проверяем, не говорил ли бот совсем недавно.
+        seconds_since_bot = (
+            time.time()
+            - get_chat_state(chat_id)["last_bot_reply_at"]
+        )
 
-            # Считаем, что бот уже "увидел" обращение
-            # и сознательно решил промолчать.
+        # Простые reply боту в течение нескольких минут почти всегда игнорируем.
+        if seconds_since_bot < DIRECT_COOLDOWN and not mentioned:
+            print(
+                "DIRECT COOLDOWN SKIP:",
+                f"user={user.full_name}",
+            )
             reset_auto_counter(chat_id)
             return
 
-        history = get_history(chat_id, 40)
+        if mentioned:
+            reply_chance = DIRECT_MENTION_CHANCE
+        else:
+            reply_chance = DIRECT_REPLY_CHANCE
 
-        prompt = f"""
-{make_system_prompt(toxicity)}
+        # Вопрос — повод ответить чаще, но всё равно не обязательно.
+        if "?" in text:
+            if mentioned:
+                reply_chance = max(reply_chance, 0.65)
+            else:
+                reply_chance = max(reply_chance, 0.35)
 
-Вот последние сообщения:
+        # Содержательное обращение чуть повышает шанс.
+        if len(text.strip()) >= 50:
+            reply_chance = max(reply_chance, 0.40)
 
-----------------
-{history}
-----------------
+        if random.random() > reply_chance:
+'''
+if old_direct not in text:
+    raise RuntimeError("Не найден блок прямых ответов.")
+text = text.replace(old_direct, new_direct, 1)
 
-Пользователь {user.full_name}
-обратился непосредственно к тебе.
-
-Его сообщение:
-
-{text}
-
-Ты не обязан поддерживать бесконечный диалог.
+# 7) Смягчить prompt прямого ответа.
+text = text.replace(
+'''Ты не обязан поддерживать бесконечный диалог.
 Ответь только одной короткой естественной репликой.
 Не превращай разговор в чат "человек ↔ бот".
 Если он тебя подкалывает — можешь подколоть в ответ.
@@ -264,108 +332,59 @@ new_handle = r'''async def handle_message(
 Используй контекст переписки.
 Максимум 1-2 коротких предложения.
 Не объясняй ответ.
-"""
+''',
+'''Ты не обязан отвечать эмоционально или жёстко.
+Если отвечаешь, будь спокойным и дружеским.
+Предпочитай лёгкую иронию прямому roast.
+Не пытайся оставить последнее слово и не разгоняй конфликт.
 
-        answer = await ask_gemini(
-            prompt,
-            temperature=1.0,
-        )
+Используй контекст переписки.
+Максимум одно короткое предложение, редко два.
+Не объясняй ответ.
+''',
+1,
+)
 
-        if answer:
-            await send_bot_message(
-                context,
-                chat_id,
-                answer,
-                reply_to_message=message,
-            )
+# 8) Обновить комментарии в авто-блоке.
+text = text.replace(
+"# Обычно ждём 12-20 содержательных сообщений.",
+"# Обычно ждём 20-35 содержательных сообщений.",
+1,
+)
+text = text.replace(
+"# После своей автоматической реплики бот молчит минимум 10 минут.",
+"# После своей автоматической реплики бот молчит минимум 20 минут.",
+1,
+)
 
-        reset_auto_counter(chat_id)
-        return
-
-    # =====================================================
-    # АВТОМАТИЧЕСКАЯ РЕПЛИКА
-    # =====================================================
-
-    state = get_chat_state(chat_id)
-
-    count = state["messages_since_check"]
-    next_check = state["next_check_after"]
-
-    # Обычно ждём 12-20 содержательных сообщений.
-    if count < next_check:
-        return
-
-    seconds_since_bot = (
-        time.time()
-        - state["last_bot_reply_at"]
-    )
-
-    # После своей автоматической реплики бот молчит минимум 10 минут.
-    if seconds_since_bot < AUTO_COOLDOWN:
-        return
-
-    # Сбрасываем счётчик до обращения к Gemini,
-    # чтобы несколько сообщений подряд не создавали несколько запросов.
-    reset_auto_counter(chat_id)
-
-    history = get_history(chat_id, HISTORY_LIMIT)
-
-    decision = await decide_auto_reply(
-        history,
-        toxicity,
-    )
-
-    if not decision:
-        return
-
-    should_reply = decision.get("reply", False)
-
-    try:
-        score = int(decision.get("score", 0))
-    except (TypeError, ValueError):
-        score = 0
-
-    answer = str(
-        decision.get("message", "")
-    ).strip()
-
-    target = decision.get("target", "")
-
-    print(
-        "AUTO CHECK:",
-        f"reply={should_reply}",
-        f"score={score}",
-        f"target={target}",
-    )
-
-    if not should_reply:
-        return
-
-    if score < MIN_AUTO_SCORE:
-        return
-
-    if not answer:
-        return
-
-    # Дополнительная "человеческая" пассивность:
-    # даже хороший момент бот использует не всегда.
-    if random.random() > AUTO_REPLY_CHANCE:
-        print(
-            "AUTO SKIP: good moment, but bot chose silence",
-            f"chance={AUTO_REPLY_CHANCE:.2f}",
-        )
-        return
-
-    await send_bot_message(
-        context,
-        chat_id,
-        answer,
-    )
-
-
+# 9) Смягчить текст /toxicity, чтобы уровни не подталкивали к агрессии.
+old_desc = '''    descriptions = {
+        1: "добрый мальчик",
+        2: "лёгкий подъеб",
+        3: "уже кусается",
+        4: "режим токсичного друга",
+        5: "злой гоблин активирован",
+    }
 '''
-text = text[:start] + new_handle + text[end:]
+new_desc = '''    descriptions = {
+        1: "мягкая ирония",
+        2: "лёгкий дружеский стёб",
+        3: "заметный сарказм",
+        4: "острее, но без унижений",
+        5: "максимум остроты без перехода на личности",
+    }
+'''
+if old_desc in text:
+    text = text.replace(old_desc, new_desc, 1)
 
 dst.write_text(text, encoding="utf-8")
+
 print(f"Готово: {dst}")
-print("Изменения: 12–20 сообщений, cooldown 10 мин, score >= 9, emoji/короткие ответы игнорируются, прямой reply не гарантирует ответ.")
+print("Новые настройки:")
+print("- автопроверка: 20–35 содержательных сообщений")
+print("- автокулдаун: 20 минут")
+print("- автоответ: только score=10 и ещё 20% шанс")
+print("- обычный reply боту: 15%")
+print("- @упоминание: 50%")
+print("- direct cooldown: 3 минуты")
+print("- юмор смещён от roast к лёгкой иронии/ситуационным шуткам")
